@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-st.set_page_config(page_title="Análisis Estadístico Descriptivo", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Análisis Estadístico Descriptivo", layout="wide")
 
 SAMPLES = {
     "Calificaciones": "3.2 4.1 3.8 2.9 4.5 3.6 3.9 4.0 2.5 3.3 4.7 3.1 3.7 4.2 3.5 2.8 4.4 3.9 3.0 3.6 4.8 3.4 3.8 2.7 4.1 3.2 3.9 4.6 3.5 3.3 1.2 4.0 3.7 3.1 4.3 3.6 2.9 3.8 4.9 3.4",
@@ -43,13 +43,17 @@ def quantile(s, p):
     lo = int(math.floor(pos)); f = pos - lo
     return s[lo - 1] + f * (s[lo] - s[lo - 1])
 
+# Asumiendo que 'quantile' está importado de antemano (ej: from numpy import quantile)
+
 def compute(values, rule="Sturges"):
     s = sorted(values); N = len(s); mean = sum(s) / N
     median = s[(N - 1) // 2] if N % 2 else (s[N // 2 - 1] + s[N // 2]) / 2
     counts = pd.Series(s).value_counts().sort_index()
     maxc = counts.max(); modes = list(counts[counts == maxc].index)
+    
     if maxc == 1 or len(modes) == len(counts): modes, mtype = [], "Amodal"
     else: mtype = {1: "Unimodal", 2: "Bimodal"}.get(len(modes), "Multimodal")
+    
     q1, q2, q3 = quantile(s, .25), quantile(s, .5), quantile(s, .75); iqr = q3 - q1
     mom = lambda p: sum((x - mean) ** p for x in s) / N
     m2, m3, m4 = mom(2), mom(3), mom(4); sd = math.sqrt(m2)
@@ -57,16 +61,38 @@ def compute(values, rule="Sturges"):
     g1 = m3 / sd**3 if sd else 0; g2 = m4 / sd**4 - 3 if sd else 0
     lf, uf = q1 - 1.5 * iqr, q3 + 1.5 * iqr
     out = [v for v in s if v < lf or v > uf]
+    
+    # --- BLOQUE CORREGIDO: Manejo de variables discretas ---
+    rng = s[-1] - s[0]
     k = max(1, math.ceil(1 + 3.322 * math.log10(N)) if rule == "Sturges" else math.ceil(math.sqrt(N)))
-    rng = s[-1] - s[0]; w = rng / k if rng else 1
+    discrete = all(float(v).is_integer() for v in s)
+
+    if discrete:
+        # Amplitud entera: evita clases vacías "entre" enteros
+        w = max(1, math.ceil(rng / k))
+        k = math.ceil((rng + 1) / w)          # clases necesarias para cubrir todos los enteros
+    else:
+        w = rng / k if rng else 1
+
     rows, F = [], 0
     for i in range(k):
-        li = s[0] + i * w; ls = s[-1] + (0 if rng else 1) if i == k - 1 else s[0] + (i + 1) * w
-        fi = sum(1 for v in s if v >= li and (v <= ls if i == k - 1 else v < ls)); F += fi
-        rows.append({"Li": li, "Ls": ls, "xi": (li + ls) / 2, "fi": fi, "hi": fi / N, "Fi": F, "Hi": F / N})
+        li = s[0] + i * w
+        if discrete:
+            ls = li + w
+            fi = sum(1 for v in s if li <= v < ls)
+            xi = (li + ls - 1) / 2            # centro real de los enteros de la clase
+        else:
+            ls = s[-1] + (0 if rng else 1) if i == k - 1 else s[0] + (i + 1) * w
+            fi = sum(1 for v in s if v >= li and (v <= ls if i == k - 1 else v < ls))
+            xi = (li + ls) / 2
+        F += fi
+        rows.append({"Li": li, "Ls": ls, "xi": xi, "fi": fi, "hi": fi / N, "Fi": F, "Hi": F / N})
+    # --- FIN DEL BLOQUE CORREGIDO ---
+
     return dict(N=N, s=s, sum=sum(s), mean=mean, median=median, modes=modes, mtype=mtype, min=s[0], max=s[-1],
                 range=rng, q1=q1, q2=q2, q3=q3, iqr=iqr, var=m2, sd=sd, cv=cv, g1=g1, g2=g2, m1=mom(1), m2=m2,
                 m3=m3, m4=m4, lf=lf, uf=uf, out=out, k=k, w=w, classes=pd.DataFrame(rows), counts=counts)
+
 
 def fmt(x, d=4):
     if x is None or not math.isfinite(x): return "—"
@@ -127,7 +153,7 @@ def density(r):
     return fig
 
 # ---------------- Interfaz ----------------
-st.title("📊 Análisis Estadístico Descriptivo")
+st.title("Análisis Estadístico Descriptivo")
 st.caption("UTP · Ingeniería en Sistemas y Computación · Estadística poblacional (divide por N)")
 
 if "parsed" not in st.session_state:
@@ -144,8 +170,8 @@ p = st.session_state.parsed
 r = compute(p["values"], rule) if p["kind"] != "cualitativa" and len(p["values"]) >= 2 else None
 
 if step.startswith("1"):
-    st.subheader("Paso 01 · Gestor de datos")
-    t1, t2, t3 = st.tabs(["✍️ Manual", "📁 Archivo CSV/Excel", "🧪 Ejemplos"])
+    st.subheader("Paso 1 · Gestor de datos")
+    t1, t2, t3 = st.tabs([" Manual", " Archivo CSV/Excel", " Ejemplos"])
     with t1:
         txt = st.text_area("Valores separados por espacios, comas o saltos de línea", height=150)
         if st.button("Cargar datos") and txt.strip():
@@ -183,7 +209,7 @@ elif r is None:
     st.warning("Carga al menos 2 datos numéricos en el paso 1.")
 
 elif step.startswith("2"):
-    st.subheader("Paso 02 · Tabla de frecuencias")
+    st.subheader("Paso 2 · Tabla de frecuencias")
     order = st.radio("Orden de datos", ["Ascendente", "Descendente"], horizontal=True)
     st.write(", ".join(fmt(v, 2) for v in (r["s"] if order == "Ascendente" else r["s"][::-1])))
     st.latex(r"k = 1 + 3.322\log_{10}N" if rule == "Sturges" else r"k=\lceil\sqrt{N}\rceil")
@@ -195,7 +221,7 @@ elif step.startswith("2"):
     a, b = st.columns(2); a.plotly_chart(histogram(r), use_container_width=True); b.plotly_chart(ogive(r), use_container_width=True)
 
 elif step.startswith("3"):
-    st.subheader("Paso 03 · Tendencia central y posición")
+    st.subheader("Paso 3 · Tendencia central y posición")
     c = st.columns(3)
     c[0].metric("Media μ", fmt(r["mean"])); c[0].latex(r"\mu=\frac{\sum x_i}{N}")
     c[1].metric("Mediana Me", fmt(r["median"]))
@@ -208,18 +234,18 @@ elif step.startswith("3"):
     st.plotly_chart(density(r), use_container_width=True)
 
 elif step.startswith("4"):
-    st.subheader("Paso 04 · Dispersión y atípicos")
+    st.subheader("Paso 4 · Dispersión y atípicos")
     c = st.columns(4)
     c[0].metric("Rango", fmt(r["range"])); c[1].metric("Varianza σ²", fmt(r["var"]))
     c[2].metric("Desv. estándar σ", fmt(r["sd"])); c[3].metric("CV", f"{fmt(r['cv'],2)} %")
     st.latex(r"\sigma^2=\frac{\sum (x_i-\mu)^2}{N}\qquad CV=\frac{\sigma}{|\mu|}\cdot100")
-    st.caption(f"Variabilidad {cv_label(r['cv'])}. RIC = {fmt(r['iqr'])}. Cercas: [{fmt(r['lf'])}, {fmt(r['uf'])}]")
+    st.caption(f"Variabilidad {cv_label(r['cv'])}. RIC = {fmt(r['iqr'])}. Limites: [{fmt(r['lf'])}, {fmt(r['uf'])}]")
     st.plotly_chart(boxplot(r), use_container_width=True)
     if r["out"]: st.error("Atípicos: " + ", ".join(fmt(v, 2) for v in r["out"]))
     else: st.success("Sin valores atípicos.")
 
 elif step.startswith("5"):
-    st.subheader("Paso 05 · Momentos y forma")
+    st.subheader("Paso 5 · Momentos y forma")
     c = st.columns(4)
     for i, k in enumerate(["m1", "m2", "m3", "m4"]): c[i].metric(f"Momento central {k}", fmt(r[k]))
     st.latex(r"m_r=\frac{\sum (x_i-\mu)^r}{N}\quad g_1=\frac{m_3}{\sigma^3}\quad g_2=\frac{m_4}{\sigma^4}-3")
@@ -230,7 +256,7 @@ elif step.startswith("5"):
     st.plotly_chart(density(r), use_container_width=True)
 
 else:
-    st.subheader("Paso 06 · Dashboard e informe")
+    st.subheader("Paso 6 · Dashboard e informe")
     c = st.columns(6)
     for col, (l, v) in zip(c, [("N", str(r["N"])), ("μ", fmt(r["mean"], 2)), ("Me", fmt(r["median"], 2)), ("σ", fmt(r["sd"], 2)), ("CV %", fmt(r["cv"], 2)), ("Atípicos", str(len(r["out"])))]):
         col.metric(l, v)
